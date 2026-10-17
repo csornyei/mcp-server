@@ -1,0 +1,32 @@
+services:
+  mcp:
+    build:
+      context: ./mcp_server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      HEALTH_API_BASE_URL: ${HEALTH_API_BASE_URL:-http://host.docker.internal:8000}
+      HEALTH_API_TIMEOUT_SECONDS: ${HEALTH_API_TIMEOUT_SECONDS:-30}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks:
+      - mcp-private
+
+  tunnel:
+    image: ghcr.io/openai/tunnel-client:latest
+    restart: unless-stopped
+    environment:
+      CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY}
+      CONTROL_PLANE_TUNNEL_ID: ${CONTROL_PLANE_TUNNEL_ID}
+    command:
+      - run
+      - --mcp.server-url=http://mcp:8000/mcp
+      - --health.listen-addr=127.0.0.1:8080
+    depends_on:
+      - mcp
+    networks:
+      - mcp-private
+
+networks:
+  mcp-private:
+    driver: bridge

@@ -1,0 +1,82 @@
+name: health-stack
+
+services:
+  influxdb:
+    image: influxdb:${INFLUXDB_TAG:-3.9-core}
+    restart: unless-stopped
+    command:
+      - influxdb3
+      - serve
+      - --node-id=node0
+      - --object-store=file
+      - --data-dir=/var/lib/influxdb3/data
+      - --plugin-dir=/var/lib/influxdb3/plugins
+    volumes:
+      - influxdb-data:/var/lib/influxdb3/data
+      - influxdb-plugins:/var/lib/influxdb3/plugins
+    networks:
+      - health-private
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_TAG:-latest}
+    restart: unless-stopped
+    command:
+      - --config=/etc/otelcol-contrib/config.yaml
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    networks:
+      - health-private
+
+  health-api:
+    image: ghcr.io/${GHCR_OWNER:-csornyei}/health-api:${HEALTH_API_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      INFLUXDB_HOST: http://influxdb:8181
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-}
+      INFLUXDB_DATABASE: ${INFLUXDB_DATABASE:-health}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      JSON_LOGS: ${JSON_LOGS:-true}
+      SUMMARY_QUERY_CHUNK_DAYS: ${SUMMARY_QUERY_CHUNK_DAYS:-1}
+    ports:
+      - "${HEALTH_API_BIND_ADDRESS:-127.0.0.1}:${HEALTH_API_PORT:-8000}:8000"
+    depends_on:
+      - influxdb
+      - otel-collector
+    networks:
+      - health-private
+
+  mcp:
+    image: ghcr.io/${GHCR_OWNER:-csornyei}/mcp-server:${MCP_SERVER_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      HEALTH_API_BASE_URL: http://health-api:8000
+      HEALTH_API_TIMEOUT_SECONDS: ${HEALTH_API_TIMEOUT_SECONDS:-30}
+    depends_on:
+      - health-api
+    networks:
+      - health-private
+
+  tunnel:
+    image: ghcr.io/openai/tunnel-client:latest
+    restart: unless-stopped
+    environment:
+      CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY:?Set CONTROL_PLANE_API_KEY}
+      CONTROL_PLANE_TUNNEL_ID: ${CONTROL_PLANE_TUNNEL_ID:?Set CONTROL_PLANE_TUNNEL_ID}
+    command:
+      - run
+      - --mcp.server-url=http://mcp:8000/mcp
+      - --health.listen-addr=127.0.0.1:8080
+    depends_on:
+      - mcp
+    networks:
+      - health-private
+
+volumes:
+  influxdb-data:
+  influxdb-plugins:
+
+networks:
+  health-private:
+    driver: bridge
